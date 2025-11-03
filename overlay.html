@@ -156,6 +156,43 @@
             letter-spacing: 1px;
         }
 
+        /* Centered stats under the time (fouls and timeouts) */
+        .center-stats {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            align-items: center;
+            margin-top: 4px;
+            color: #cccccc;
+            font-size: 15px;
+        }
+
+        .center-stats .stat-line {
+            display: grid;
+            grid-template-columns: 48px 1fr 48px; /* home - label - away */
+            gap: 8px;
+            align-items: center;
+            width: 100%;
+            justify-items: center;
+        }
+
+        .center-stats .stat-value {
+            font-weight: bold;
+            color: #ffffff;
+            width: 48px;
+            text-align: center;
+            font-size: 16px;
+        }
+
+        .center-stats .stat-label {
+            color: #999999;
+            font-size: 13px;
+            text-transform: none;
+            font-weight: normal;
+            text-align: center;
+            white-space: nowrap;
+        }
+
         .game-state.special {
             color: #ff9900;
             font-weight: bold;
@@ -224,42 +261,7 @@
             to { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
 
-        /* Overtime badge */
-        .overtime-badge {
-            position: absolute;
-            top: -10px;
-            right: -10px;
-            background: linear-gradient(135deg, #ff4444, #cc0000);
-            color: white;
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: bold;
-            text-transform: uppercase;
-            box-shadow: 0 4px 8px rgba(255, 0, 0, 0.4);
-            animation: overtimePulse 2s infinite;
-        }
-
-        @keyframes overtimePulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-
-        /* Final game badge */
-        .final-badge {
-            position: absolute;
-            top: -10px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: linear-gradient(135deg, #4CAF50, #45a049);
-            color: white;
-            padding: 8px 20px;
-            border-radius: 25px;
-            font-size: 14px;
-            font-weight: bold;
-            text-transform: uppercase;
-            box-shadow: 0 4px 8px rgba(76, 175, 80, 0.4);
-        }
+        /* Badges removed: overtime and final badges were removed per request */
 
         /* No data message */
         .no-data {
@@ -376,8 +378,7 @@
         function createScoreboard(data) {
             return `
                 <div class="scoreboard">
-                    <div id="overtimeBadge" class="overtime-badge" style="display: none;">OVERTIME</div>
-                    <div id="finalBadge" class="final-badge" style="display: none;">FINAL</div>
+                    <!-- Overtime and Final badges removed -->
                     
                     <!-- Home Team -->
                     <div class="team">
@@ -393,7 +394,22 @@
                     <div class="game-info">
                         <div class="period" id="period">1st Quarter</div>
                         <div class="time" id="time">12:00</div>
+
                         <div class="game-state" id="gameState">PRE-GAME</div>
+
+                        <!-- Centered fouls and timeouts below the game state in columns: home - label - away -->
+                        <div class="center-stats" id="centerStats">
+                            <div class="stat-line">
+                                <span class="stat-value" id="homeFoulsCenter">0</span>
+                                <span class="stat-label">Fouls</span>
+                                <span class="stat-value" id="awayFoulsCenter">0</span>
+                            </div>
+                            <div class="stat-line">
+                                <span class="stat-value" id="homeTimeoutsCenter">0</span>
+                                <span class="stat-label">Timeouts</span>
+                                <span class="stat-value" id="awayTimeoutsCenter">0</span>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="divider"></div>
@@ -406,23 +422,7 @@
                         <div class="score" id="awayScore">0</div>
                     </div>
 
-                    <div class="divider"></div>
-
-                    <!-- Stats -->
-                    <div class="stats">
-                        <div class="stat-row">
-                            <span class="stat-label">Fouls:</span>
-                            <span class="stat-value" id="homeFouls">0</span>
-                            <span>-</span>
-                            <span class="stat-value" id="awayFouls">0</span>
-                        </div>
-                        <div class="stat-row">
-                            <span class="stat-label">Timeouts:</span>
-                            <span class="stat-value" id="homeTimeouts">0</span>
-                            <span>-</span>
-                            <span class="stat-value" id="awayTimeouts">0</span>
-                        </div>
-                    </div>
+                    <!-- Right-side stats removed; fouls/timeouts are now shown under the time -->
                 </div>
             `;
         }
@@ -503,25 +503,22 @@
             const isSpecialState = ['Halftime', 'PreGame', 'Final'].includes(data.game_state);
             updateClass('gameState', 'special', isSpecialState);
 
-            // Update fouls and timeouts
+            // Update fouls and timeouts (original IDs may not exist after layout change)
             updateElement('homeFouls', data.home_fouls);
             updateElement('awayFouls', data.away_fouls);
             updateElement('homeTimeouts', data.home_timeouts);
             updateElement('awayTimeouts', data.away_timeouts);
 
+            // Update centered stats under the time (formatted as: number - label - number)
+            updateElement('homeFoulsCenter', data.home_fouls);
+            updateElement('awayFoulsCenter', data.away_fouls);
+            updateElement('homeTimeoutsCenter', data.home_timeouts);
+            updateElement('awayTimeoutsCenter', data.away_timeouts);
+
             // Update possession indicators
             updateClass('homePossession', 'active', data.possession === 'Home');
             updateClass('awayPossession', 'active', data.possession === 'Away');
 
-            // Update badges
-            const overtimeBadge = document.getElementById('overtimeBadge');
-            const finalBadge = document.getElementById('finalBadge');
-            if (overtimeBadge) {
-                overtimeBadge.style.display = data.is_overtime ? 'block' : 'none';
-            }
-            if (finalBadge) {
-                finalBadge.style.display = data.is_finished ? 'block' : 'none';
-            }
 
             previousData = data;
         }

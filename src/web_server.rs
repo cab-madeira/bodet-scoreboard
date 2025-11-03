@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::fs;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -104,11 +105,22 @@ fn handle_api_request(
 }
 
 fn handle_overlay_request(stream: &mut TcpStream) -> std::io::Result<()> {
-    let html = include_str!("../overlay.html");
-    
+    // Try to read the overlay HTML from disk so updates are served immediately.
+    // Check common locations and fall back to the embedded compile-time HTML if necessary.
+    let html = match fs::read_to_string("overlay.html") {
+        Ok(s) => s,
+        Err(_) => match fs::read_to_string("static/overlay.html") {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Warning: could not read overlay.html at runtime: {}\nUsing embedded HTML built into the binary.", e);
+                include_str!("../overlay.html").to_string()
+            }
+        },
+    };
+
     let response = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n\r\n{}",
-        html.len(),
+        html.as_bytes().len(),
         html
     );
 
