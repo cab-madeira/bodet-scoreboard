@@ -9,45 +9,44 @@
 <body>
     <div class="scoreboard">
         <div class="team home">
-            <div class="team-name">HOME</div>
-            <div class="score" id="home-score">0</div>
+            <div class="team-name" id="home-team-name">HOME</div>
+            <div class="score" id="home-score">-</div>
             <div class="stats">
                 <div class="stat">
                     <span class="stat-label">Fouls</span>
-                    <span class="stat-value" id="home-fouls">0</span>
+                    <span class="stat-value" id="home-fouls">-</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Timeouts</span>
-                    <span class="stat-value" id="home-timeouts">7</span>
+                    <span class="stat-value" id="home-timeouts">-</span>
                 </div>
             </div>
-            <div class="possession" id="home-possession">●</div>
         </div>
 
         <div class="center-info">
-            <div class="period" id="period">1st Quarter</div>
-            <div class="time" id="time">12:00</div>
-            <div class="game-state" id="game-state">PRE-GAME</div>
+            <div class="period" id="period">-</div>
+            <div class="time-container">
+                            <div class="time" id="time">--:--<span class="pause-dot" id="pause-dot"></span></div>
+                <div class="pause-dot" id="pause-dot"></div>
+            </div>
+            <div class="shot-clock" id="shot-clock">--</div>
         </div>
 
         <div class="team away">
-            <div class="team-name">AWAY</div>
-            <div class="score" id="away-score">0</div>
+            <div class="team-name" id="away-team-name">AWAY</div>
+            <div class="score" id="away-score">-</div>
             <div class="stats">
                 <div class="stat">
                     <span class="stat-label">Fouls</span>
-                    <span class="stat-value" id="away-fouls">0</span>
+                    <span class="stat-value" id="away-fouls">-</span>
                 </div>
                 <div class="stat">
                     <span class="stat-label">Timeouts</span>
-                    <span class="stat-value" id="away-timeouts">7</span>
+                    <span class="stat-value" id="away-timeouts">-</span>
                 </div>
             </div>
-            <div class="possession" id="away-possession">●</div>
         </div>
     </div>
-
-    <div class="status" id="status">Waiting for data...</div>
 
     <script src="overlay.js"></script>
 </body>

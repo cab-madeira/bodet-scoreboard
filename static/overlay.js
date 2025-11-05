@@ -1,25 +1,32 @@
 // State management
 let currentGameState = null;
 
+// Get URL parameters
+const urlParams = new URLSearchParams(window.location.search);
+const homeTeamName = urlParams.get('home') || 'HOME';
+const awayTeamName = urlParams.get('away') || 'AWAY';
+
+// Update team names
+document.getElementById('home-team-name').textContent = homeTeamName;
+document.getElementById('away-team-name').textContent = awayTeamName;
+
 // Connect to SSE endpoint
 const evtSource = new EventSource('/api/stream');
 
 evtSource.onopen = () => {
-    updateStatus('Connected', 'connected');
+    // Connection opened
 };
 
 evtSource.onerror = () => {
-    updateStatus('Connection error', 'error');
+    // Connection error
 };
 
 evtSource.onmessage = (event) => {
     try {
         const data = JSON.parse(event.data);
         updateScoreboard(data);
-        updateStatus('Live', 'connected');
     } catch (e) {
         console.error('Error parsing data:', e);
-        updateStatus('Parse error', 'error');
     }
 };
 
@@ -42,10 +49,10 @@ function updateScoreboard(data) {
     updateElement('home-timeouts', data.home_timeouts);
     updateElement('away-timeouts', data.away_timeouts);
     
-    // Update possession
-    updatePossession(data.possession);
+    // Update shot clock
+    updateShotClock(data.shot_clock);
     
-    // Update game state
+    // Update game state (pause dot)
     updateGameState(data.game_state);
     
     // Store current state
@@ -54,6 +61,8 @@ function updateScoreboard(data) {
 
 function updateElementIfChanged(id, value) {
     const element = document.getElementById(id);
+    if (!element) return;
+    
     const currentValue = element.textContent;
     const newValue = value.toString();
     
@@ -65,12 +74,24 @@ function updateElementIfChanged(id, value) {
 }
 
 function updateElement(id, value) {
-    document.getElementById(id).textContent = value;
+    const element = document.getElementById(id);
+    if (element) {
+        element.textContent = value;
+    }
 }
 
 function updateTime(minutes, seconds) {
-    const timeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    let timeStr;
+    
+    // If minutes contains a dot, it's already in seconds.tenths format
+    if (minutes.includes('.')) {
+        timeStr = minutes;
+    } else {
+        timeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    
     const timeElement = document.getElementById('time');
+    if (!timeElement) return;
     
     if (timeElement.textContent !== timeStr) {
         timeElement.textContent = timeStr;
@@ -79,38 +100,27 @@ function updateTime(minutes, seconds) {
     }
 }
 
-function updatePossession(possession) {
-    const homePossession = document.getElementById('home-possession');
-    const awayPossession = document.getElementById('away-possession');
+function updateShotClock(shotClock) {
+    const element = document.getElementById('shot-clock');
+    if (!element) return;
     
-    homePossession.classList.remove('active');
-    awayPossession.classList.remove('active');
+    const newValue = shotClock || '--';
     
-    if (possession === 'Home') {
-        homePossession.classList.add('active');
-    } else if (possession === 'Away') {
-        awayPossession.classList.add('active');
+    if (element.textContent !== newValue) {
+        element.textContent = newValue;
+        element.classList.add('updated');
+        setTimeout(() => element.classList.remove('updated'), 400);
     }
 }
 
 function updateGameState(gameState) {
-    const element = document.getElementById('game-state');
-    element.textContent = gameState.toUpperCase().replace(/([A-Z])/g, ' $1').trim();
+    const pauseDot = document.getElementById('pause-dot');
+    if (!pauseDot) return;
     
-    // Remove all state classes
-    element.classList.remove('pre-game', 'running', 'paused', 'halftime', 'overtime', 'final');
-    
-    // Add appropriate class
-    const stateClass = gameState.toLowerCase().replace(/([A-Z])/g, '-$1').toLowerCase();
-    element.classList.add(stateClass);
-}
-
-function updateStatus(message, className) {
-    const status = document.getElementById('status');
-    status.textContent = message;
-    status.classList.remove('connected', 'error');
-    if (className) {
-        status.classList.add(className);
+    if (gameState === 'paused') {
+        pauseDot.classList.add('visible');
+    } else {
+        pauseDot.classList.remove('visible');
     }
 }
 

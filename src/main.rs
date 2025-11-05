@@ -1,8 +1,10 @@
 use env_logger::Env;
 use log::{debug, error, info, warn};
 use std::{
-    fs::OpenOptions, io::{Read, Write}, net::{TcpListener, TcpStream}, os::linux::raw::stat, thread, time::{Duration, SystemTime, UNIX_EPOCH}
+    fs::OpenOptions, io::{Read, Write}, net::{TcpListener, TcpStream}, os::linux::raw::stat, sync::{Arc, Mutex}, thread, time::{Duration, SystemTime, UNIX_EPOCH}
 };
+use warp::Filter;
+use serde::{Deserialize, Serialize};
 
 /// Protocol control characters.
 const SOH: u8 = 0x01;
@@ -210,12 +212,53 @@ impl StatusWord50 {
     }
 }
 
-fn parse_valid_frame(frame: ProtocolFrame) {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameState {
+    pub home_score: String,
+    pub away_score: String,
+    pub time_minutes: String,
+    pub time_seconds: String,
+    pub period_name: String,
+    pub home_fouls: String,
+    pub away_fouls: String,
+    pub home_timeouts: String,
+    pub away_timeouts: String,
+    pub possession: Option<String>, // "Home", "Away", or None
+    pub game_state: String, // "pre-game", "running", "paused", etc.
+    pub shot_clock: Option<String>,
+}
+
+impl Default for GameState {
+    fn default() -> Self {
+        Self {
+            home_score: "-".to_string(),
+            away_score: "-".to_string(),
+            time_minutes: "--".to_string(),
+            time_seconds: "--".to_string(),
+            period_name: "-".to_string(),
+            home_fouls: "-".to_string(),
+            away_fouls: "-".to_string(),
+            home_timeouts: "-".to_string(),
+            away_timeouts: "-".to_string(),
+            possession: None,
+            game_state: "pre-game".to_string(),
+            shot_clock: None,
+        }
+    }
+}
+
+fn parse_valid_frame(frame: ProtocolFrame, game_state: &Arc<Mutex<GameState>>, broadcast_tx: &tokio::sync::broadcast::Sender<String>) {
     // Ensure there's enough data to read the message type
     if frame.message.len() < 2 {
         warn!("Message too short to determine type");
         return;
     }
+
+    let mut state_changed = false;
+    let mut updated_state = {
+        let current = game_state.lock().unwrap();
+        current.clone()
+    };
 
     // First two bytes of the message indicate the message type
     match (frame.message[0], frame.message[1]) {
@@ -261,15 +304,31 @@ fn parse_valid_frame(frame: ProtocolFrame) {
 
             if status_word.game_clock_off {
                 info!("Game Clock is OFF");
+                updated_state.game_state = "paused".to_string();
             } else {
                 info!("Game Clock is ON");
+                updated_state.game_state = "running".to_string();
             }
 
             if status_word.possession_in_tenth {
-                info!(
-                    "{}{}.{}",
-                    message.minutes_1 as char, message.minutes_2 as char, message.seconds_2 as char
-                );
+                let minutes = format!("{}{}", message.minutes_1 as char, message.minutes_2 as char);
+                let seconds = format!("{}{}", message.seconds_1 as char, message.seconds_2 as char);
+                
+                if minutes == "00" {
+                    info!(
+                        "{}.{}",
+                        message.seconds_1 as char, message.seconds_2 as char
+                    );
+                    updated_state.time_minutes = format!("{}.{}", message.seconds_1 as char, message.seconds_2 as char);
+                    updated_state.time_seconds = "00".to_string();
+                } else {
+                    info!(
+                        "{}{}.{}",
+                        message.minutes_1 as char, message.minutes_2 as char, message.seconds_2 as char
+                    );
+                    updated_state.time_minutes = format!("{}{}", message.minutes_1 as char, message.minutes_2 as char);
+                    updated_state.time_seconds = format!("{}0", message.seconds_2 as char);
+                }
             } else {
                 info!(
                     "{}{}:{}{}",
@@ -278,6 +337,8 @@ fn parse_valid_frame(frame: ProtocolFrame) {
                     message.seconds_1 as char,
                     message.seconds_2 as char
                 );
+                updated_state.time_minutes = format!("{}{}", message.minutes_1 as char, message.minutes_2 as char);
+                updated_state.time_seconds = format!("{}{}", message.seconds_1 as char, message.seconds_2 as char);
             }
 
             info!(
@@ -286,6 +347,16 @@ fn parse_valid_frame(frame: ProtocolFrame) {
                 message.guest_time_outs as char,
                 message.period as char
             );
+
+            updated_state.home_timeouts = (message.home_time_outs as char).to_string();
+            updated_state.away_timeouts = (message.guest_time_outs as char).to_string();
+            updated_state.period_name = format!("{} Quarter", message.period as char);
+
+            if status_word.possession_in_tenth {
+                updated_state.possession = Some("Home".to_string());
+            }
+
+            state_changed = true;
         }
         // Message Type 30
         (0x33, 0x30) => {
@@ -318,7 +389,10 @@ fn parse_valid_frame(frame: ProtocolFrame) {
                 message.guest_score_2 as char,
                 message.guest_score_3 as char
             );
-            
+
+            updated_state.home_score = format!("{}{}{}", message.home_score_1 as char, message.home_score_2 as char, message.home_score_3 as char);
+            updated_state.away_score = format!("{}{}{}", message.guest_score_1 as char, message.guest_score_2 as char, message.guest_score_3 as char);
+            state_changed = true;
         }
 
         // Message Type 31
@@ -354,6 +428,10 @@ fn parse_valid_frame(frame: ProtocolFrame) {
                 message.number_of_faults_of_player as char,
                 message.team_of_player as char
             );
+
+            updated_state.home_fouls = (message.home_fouls as char).to_string();
+            updated_state.away_fouls = (message.guest_fouls as char).to_string();
+            state_changed = true;
         }
 
         // Message Type 50
@@ -376,36 +454,34 @@ fn parse_valid_frame(frame: ProtocolFrame) {
 
             let status_word = StatusWord50::from_byte(message.status_word);
             
-            // info!(
-            //     "Status Word - Clock Type: {}, Game Clock Off: {}, Horn On: {}, Possession in Tenth: {}, New Match: {}, B7: {}",
-            //     status_word.clock_type,
-            //     status_word.game_clock_off,
-            //     status_word.horn_on,
-            //     status_word.possession_in_tenth,
-            //     status_word.new_match,
-            //     status_word.b7
-            // );
-
             if status_word.possession_timer_in_tenths {
                 info!(
                     "Shot Clock Time: {}.{}",
                     message.seconds_1 as char, message.seconds_2 as char
                 );
+                updated_state.shot_clock = Some(format!("{}.{}", message.seconds_1 as char, message.seconds_2 as char));
             } else {
                 info!(
                     "Shot Clock Time: {}{}",
                     message.seconds_1 as char, message.seconds_2 as char
                 );
+                updated_state.shot_clock = Some(format!("{}{}", message.seconds_1 as char, message.seconds_2 as char));
             }
+            state_changed = true;
         }
-
-
 
         _ => {
             warn!(
                 "Unknown message type: 0x{:02X} 0x{:02X}",
                 frame.message[0], frame.message[1]
             );
+        }
+    }
+
+    if state_changed {
+        *game_state.lock().unwrap() = updated_state.clone();
+        if let Ok(json) = serde_json::to_string(&updated_state) {
+            let _ = broadcast_tx.send(json);
         }
     }
 }
@@ -423,6 +499,24 @@ fn main() {
         info!("Starting in dev mode: TCP session bytes will NOT be logged to files");
     }
 
+    // Shared game state
+    let game_state = Arc::new(Mutex::new(GameState::default()));
+    
+    // Broadcast channel for SSE
+    let (broadcast_tx, _) = tokio::sync::broadcast::channel::<String>(100);
+
+    // Clone for the web server
+    let game_state_clone = Arc::clone(&game_state);
+    let broadcast_tx_clone = broadcast_tx.clone();
+
+    // Start web server in a separate thread
+    thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            start_web_server(game_state_clone, broadcast_tx_clone).await;
+        });
+    });
+
     let tcp_address = "0.0.0.0:4001";
 
     let listener = TcpListener::bind(&tcp_address).unwrap();
@@ -433,8 +527,10 @@ fn main() {
         match stream {
             Ok(stream) => {
                 // capture dev_mode (bool is Copy so this is fine)
+                let game_state_clone = Arc::clone(&game_state);
+                let broadcast_tx_clone = broadcast_tx.clone();
                 thread::spawn(move || {
-                    if let Err(e) = handle_client(stream, !dev_mode) {
+                    if let Err(e) = handle_client(stream, !dev_mode, game_state_clone, broadcast_tx_clone) {
                         error!("Error handling client: {}", e);
                     }
                 });
@@ -447,7 +543,7 @@ fn main() {
 }
 
 // Handle a single client connection
-fn handle_client(mut stream: TcpStream, log_to_file: bool) -> std::io::Result<()> {
+fn handle_client(mut stream: TcpStream, log_to_file: bool, game_state: Arc<Mutex<GameState>>, broadcast_tx: tokio::sync::broadcast::Sender<String>) -> std::io::Result<()> {
     let peer_addr = stream.peer_addr()?;
     info!("New connection from: {}", peer_addr);
 
@@ -530,7 +626,7 @@ fn handle_client(mut stream: TcpStream, log_to_file: bool) -> std::io::Result<()
                         //     frame.lrc
                         // );
 
-                        parse_valid_frame(frame);
+                        parse_valid_frame(frame, &game_state, &broadcast_tx);
                     }
                     Err(e) => {
                         warn!("Failed to parse ProtocolFrame from {}: {}", peer_addr, e);
@@ -545,4 +641,55 @@ fn handle_client(mut stream: TcpStream, log_to_file: bool) -> std::io::Result<()
     }
 
     Ok(())
+}
+
+async fn start_web_server(game_state: Arc<Mutex<GameState>>, broadcast_tx: tokio::sync::broadcast::Sender<String>) {
+    // GET / -> serve overlay.html
+    let index = warp::path::end()
+        .and(warp::fs::file("./static/overlay.html"));
+
+    // GET /overlay.css -> serve overlay.css
+    let css = warp::path("overlay.css")
+        .and(warp::fs::file("./static/overlay.css"));
+
+    // GET /overlay.js -> serve overlay.js
+    let js = warp::path("overlay.js")
+        .and(warp::fs::file("./static/overlay.js"));
+
+    // GET /api/game -> return current game state
+    let game_state_filter = warp::any().map(move || Arc::clone(&game_state));
+    let game_api = warp::path!("api" / "game")
+        .and(game_state_filter)
+        .map(|state: Arc<Mutex<GameState>>| {
+            let state = state.lock().unwrap();
+            warp::reply::json(&*state)
+        });
+
+    // GET /api/stream -> SSE endpoint
+    let broadcast_filter = warp::any().map(move || broadcast_tx.subscribe());
+    let stream_api = warp::path!("api" / "stream")
+        .and(broadcast_filter)
+        .map(|mut rx: tokio::sync::broadcast::Receiver<String>| {
+            
+            let stream = async_stream::stream! {
+                // Send current state immediately
+                {
+                    let current_state = serde_json::to_string(&GameState::default()).unwrap_or_default();
+                    yield Ok::<_, std::convert::Infallible>(warp::sse::Event::default().data(current_state));
+                }
+                
+                while let Ok(data) = rx.recv().await {
+                    yield Ok::<_, std::convert::Infallible>(warp::sse::Event::default().data(data));
+                }
+            };
+            
+            warp::sse::reply(warp::sse::keep_alive().stream(stream))
+        });
+
+    let routes = index.or(css).or(js).or(game_api).or(stream_api);
+
+    info!("Web server starting on http://localhost:3030");
+    warp::serve(routes)
+        .run(([0, 0, 0, 0], 3030))
+        .await;
 }
