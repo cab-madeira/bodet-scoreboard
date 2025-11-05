@@ -78,8 +78,8 @@ body {
     margin-left: auto;
 }
 
-#away-score {
-    margin-left: 0;
+#away-team-name {
+    text-align: right;
 }
 
 .score.updated {
@@ -105,7 +105,7 @@ body {
 }
 
 .stat-label {
-    font-size: 8px;
+    font-size: 10px;
     color: rgba(255, 255, 255, 0.6);
     text-transform: uppercase;
     letter-spacing: 1px;
@@ -120,7 +120,7 @@ body {
 
 .fouls-container {
     display: flex;
-    gap: 1px;
+    gap: 5px;
     align-items: center;
 }
 
@@ -138,7 +138,7 @@ body {
 
 .timeouts-container {
     display: flex;
-    gap: 1px;
+    gap: 5px;
     align-items: center;
 }
 
