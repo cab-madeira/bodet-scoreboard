@@ -1,11 +1,7 @@
 use env_logger::Env;
 use log::{debug, error, info, warn};
 use std::{
-    fs::OpenOptions,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    fs::OpenOptions, io::{Read, Write}, net::{TcpListener, TcpStream}, os::linux::raw::stat, thread, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 /// Protocol control characters.
@@ -129,19 +125,44 @@ struct Message18 {
     byte_14: Option<u8>, // Reserved / unused
 }
 
+#[derive(Debug)]
 struct Message30 {
     id_1: u8,               // First byte of message ID
     id_2: u8,               // Second byte of message ID
     sports_id: u8,          // This needs to be 5 for basketball
-    home_score_byte_4: u8,  // Home score byte 4
-    home_score_byte_5: u8,  // Home score byte 5
-    home_score_byte_6: u8,  // Home score byte 6
-    guest_score_byte_7: u8, // Guest score byte 7
-    guest_score_byte_8: u8, // Guest score byte 8
-    guest_score_byte_9: u8, // Guest score byte 9
+    home_score_1: u8,       // Home score position 1
+    home_score_2: u8,       // Home score position 2
+    home_score_3: u8,       // Home score position 3
+    guest_score_1: u8,      // Guest score position 1
+    guest_score_2: u8,      // Guest score position 2
+    guest_score_3: u8,      // Guest score position 3
 }
 
-struct StatusWord {
+#[derive(Debug)]
+struct Message31{
+    id_1: u8,               // First byte of message ID
+    id_2: u8,               // Second byte of message ID
+    sports_id: u8,          // This needs to be 5 for basketball
+    byte_4: Option<u8>,     // Reserved / unused
+    home_fouls: u8,         // Home fouls
+    byte_6: Option<u8>,     // Reserved / unused
+    guest_fouls: u8,        // Guest fouls
+    number_player_on_line_1: u8, // Number of player on line position 1
+    number_player_on_line_2: u8, // Number of player on line position 2
+    number_of_faults_of_player: u8, // Number of faults of player 
+    team_of_player: u8,    // Team of player
+}
+
+#[derive(Debug)]
+struct Message50{
+    id_1: u8,               // First byte of message ID
+    id_2: u8,               // Second byte of message ID
+    status_word: u8,        // Status word
+    seconds_1: u8,         // Seconds * 10
+    seconds_2: u8,         // Seconds * 1
+}
+
+struct StatusWord18 {
     clock_type: bool,          // bit 0
     game_clock_off: bool,      // bit 1
     horn_on: bool,             // bit 2
@@ -150,7 +171,7 @@ struct StatusWord {
     b7: bool,                  // bit 7
 }
 
-impl StatusWord {
+impl StatusWord18 {
     fn from_byte(byte: u8) -> Self {
         Self {
             clock_type: (byte & (1 << 0)) != 0,
@@ -158,6 +179,32 @@ impl StatusWord {
             horn_on: (byte & (1 << 2)) != 0,
             possession_in_tenth: (byte & (1 << 4)) != 0,
             new_match: (byte & (1 << 6)) != 0,
+            b7: (byte & (1 << 7)) != 0,
+        }
+    }
+}
+
+struct StatusWord50 {
+    b0: Option<bool>, // bit 0
+    status_possession_timer: bool,       
+    status_possession_horn: bool,              // bit 2
+    status_of_shot_clock: bool,                 // bit 2
+    possession_timer_in_tenths: bool,        // bit 4
+    b5: Option<bool>,                        // bit 6
+    b6: Option<bool>,                        // bit 7
+    b7: bool,                                // bit 7
+}
+
+impl StatusWord50 {
+    fn from_byte(byte: u8) -> Self {
+        Self {
+            b0: None,
+            status_possession_timer: (byte & (1 << 1)) != 0,
+            status_possession_horn: (byte & (1 << 2)) != 0,
+            status_of_shot_clock: (byte & (1 << 3)) != 0,
+            possession_timer_in_tenths: (byte & (1 << 4)) != 0,
+            b5: None,
+            b6: None,
             b7: (byte & (1 << 7)) != 0,
         }
     }
@@ -200,7 +247,7 @@ fn parse_valid_frame(frame: ProtocolFrame) {
                 byte_14: None,
             };
 
-            let status_word = StatusWord::from_byte(message.status_word);
+            let status_word = StatusWord18::from_byte(message.status_word);
 
             info!(
                 "Status Word - Clock Type: {}, Game Clock Off: {}, Horn On: {}, Possession in Tenth: {}, New Match: {}, B7: {}",
@@ -220,7 +267,7 @@ fn parse_valid_frame(frame: ProtocolFrame) {
 
             if status_word.possession_in_tenth {
                 info!(
-                    "{}{}:{}",
+                    "{}{}.{}",
                     message.minutes_1 as char, message.minutes_2 as char, message.seconds_2 as char
                 );
             } else {
@@ -239,48 +286,126 @@ fn parse_valid_frame(frame: ProtocolFrame) {
                 message.guest_time_outs as char,
                 message.period as char
             );
-
-            // if data[7] == 0x44 {
-            //     // Time is bellow 1 minute, so we have tenths of seconds
-
-            //     // info!("{}", &format!(
-            //     //     "{}:{}.{}",
-            //     //     data[4] * 10,
-            //     //     data[5] * 1,
-            //     //     data[6] as f32 * 0.1
-            //     // ));
-            // } else {
-            //     info!("{:?}", data);
-            //     // info!("{}", &format!(
-            //     //     "{}{}:{}{}",
-            //     //     data[4],
-            //     //     data[5],
-            //     //     data[6],
-            //     //     data[7]
-            //     // ));
-            // }
         }
         // Message Type 30
         (0x33, 0x30) => {
-            // info!("Received Message Type 30 (Scores)");
+            info!("Received Message Type 30 (Scores)");
 
-            // // Ensure there's enough data for Message Type 30
-            // if data.len() < 11 {
-            //     warn!("Message Type 30 too short");
-            //     return;
-            // }
+            // Ensure there's enough data for Message Type 30
+            if frame.message.len() < 9 {
+                warn!("Message Type 30 too short");
+                return;
+            }
 
-            // let home_score = data[3] as u32 * 100 + data[4] as u32 * 10 + data[5] as u32 * 1;
-            // let guest_score = data[6] as u32 * 100 + data[7] as u32 * 10 + data[8] as u32 * 1;
+            let message = Message30 {
+                id_1: frame.message[0],
+                id_2: frame.message[1],
+                sports_id: frame.message[2],
+                home_score_1: frame.message[3],
+                home_score_2: frame.message[4],
+                home_score_3: frame.message[5],
+                guest_score_1: frame.message[6],
+                guest_score_2: frame.message[7],
+                guest_score_3: frame.message[8],
+            };
 
-            // info!("Home Score: {}", home_score);
-            // info!("Guest Score: {}", guest_score);
+            info!(
+                "Home Score: {}{}{}, Guest Score: {}{}{}",
+                message.home_score_1 as char,
+                message.home_score_2 as char,
+                message.home_score_3 as char,
+                message.guest_score_1 as char,
+                message.guest_score_2 as char,
+                message.guest_score_3 as char
+            );
+            
         }
-        _ => {
-            // warn!(
-            //     "Unknown message type: {:02X}{:02X}",
-            //     message_id_1, message_id_2
+
+        // Message Type 31
+        (0x33, 0x31) => {
+            info!("Received Message Type 31 (Fouls and Player Info)");
+
+            // Ensure there's enough data for Message Type 31
+            if frame.message.len() < 11 {
+                warn!("Message Type 31 too short");
+                return;
+            }
+
+            let message = Message31 {
+                id_1: frame.message[0],
+                id_2: frame.message[1],
+                sports_id: frame.message[2],
+                byte_4: None,
+                home_fouls: frame.message[4],
+                byte_6: None,
+                guest_fouls: frame.message[6],
+                number_player_on_line_1: frame.message[7],
+                number_player_on_line_2: frame.message[8],
+                number_of_faults_of_player: frame.message[9],
+                team_of_player: frame.message[10],
+            };
+
+            info!(
+                "Home Fouls: {}, Guest Fouls: {}, Player on Line 1: {}, Player on Line 2: {}, Faults of Player: {}, Team of Player: {}",
+                message.home_fouls as char,
+                message.guest_fouls as char,
+                message.number_player_on_line_1 as char,
+                message.number_player_on_line_2 as char,
+                message.number_of_faults_of_player as char,
+                message.team_of_player as char
+            );
+        }
+
+        // Message Type 50
+        (0x35, 0x30) => {
+            info!("Received Message Type 50 (Shot Clock)");
+
+            // Ensure there's enough data for Message Type 50
+            if frame.message.len() < 5 {
+                warn!("Message Type 50 too short");
+                return;
+            }
+
+            let message = Message50 {
+                id_1: frame.message[0],
+                id_2: frame.message[1],
+                status_word: frame.message[2],
+                seconds_1: frame.message[3],
+                seconds_2: frame.message[4],
+            };
+
+            let status_word = StatusWord50::from_byte(message.status_word);
+            
+            // info!(
+            //     "Status Word - Clock Type: {}, Game Clock Off: {}, Horn On: {}, Possession in Tenth: {}, New Match: {}, B7: {}",
+            //     status_word.clock_type,
+            //     status_word.game_clock_off,
+            //     status_word.horn_on,
+            //     status_word.possession_in_tenth,
+            //     status_word.new_match,
+            //     status_word.b7
             // );
+
+            if status_word.possession_timer_in_tenths {
+                info!(
+                    "Shot Clock Time: {}.{}",
+                    message.seconds_1 as char, message.seconds_2 as char
+                );
+            } else {
+                info!(
+                    "Shot Clock Time: {}{}",
+                    message.seconds_1 as char, message.seconds_2 as char
+                );
+            }
+        }
+
+
+
+        _ => {
+            warn!(
+                "Unknown message type: 0x{:02X} 0x{:02X}",
+                frame.message[0], frame.message[1]
+            );
         }
     }
 }
